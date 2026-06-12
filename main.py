@@ -483,8 +483,8 @@ class BookScreen(Screen):
     def _search_web(self,kw):
         self.gl.add_widget(ML("Searching online...",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
         try:
-            import urllib.request
-            url=f"https://www.googleapis.com/books/v1/volumes?q={urllib.request.quote(kw)}&maxResults=10&langRestrict=zh-CN"
+            import urllib.parse, urllib.request
+            url=f"https://www.googleapis.com/books/v1/volumes?q={urllib.parse.quote(kw)}&maxResults=10"
             r=urllib.request.urlopen(url,timeout=10)
             data=json.loads(r.read())
             self.gl.clear_widgets()
