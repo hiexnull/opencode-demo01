@@ -14,13 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug environment
+        run: |
+          whoami
+          env | sort
+          ls -la /opt/android/ || echo "No /opt/android"
+          which buildozer || echo "buildozer not found"
+          buildozer --version || echo "buildozer version failed"
+
       - name: Build APK
         run: |
-          ln -sf /opt/android/android-sdk /home/user/
-          ln -sf /opt/android/android-ndk /home/user/
-          export PATH="/opt/android/android-sdk/cmdline-tools/latest/bin:/opt/android/android-sdk/platform-tools:$PATH"
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          cd $GITHUB_WORKSPACE
           buildozer android debug 2>&1
 
       - name: Upload APK
