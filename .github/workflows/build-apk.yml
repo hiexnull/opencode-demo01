@@ -10,20 +10,20 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: kivy/buildozer:latest
+      options: --user root
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Debug environment
-        run: |
-          whoami
-          env | sort
-          ls -la /opt/android/ || echo "No /opt/android"
-          which buildozer || echo "buildozer not found"
-          buildozer --version || echo "buildozer version failed"
+        with:
+          path: .
 
       - name: Build APK
         run: |
+          chmod -R 777 /opt/android/
+          cd $GITHUB_WORKSPACE
           buildozer android debug 2>&1
 
       - name: Upload APK
