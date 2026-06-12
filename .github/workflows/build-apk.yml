@@ -42,7 +42,14 @@ jobs:
 
       - name: Build APK
         run: |
-          buildozer android debug 2>&1
+          buildozer android debug 2>&1 | tee build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
