@@ -1,16 +1,12 @@
-import os
-import sys
-import json
-import threading
-import math
+# -*- coding: utf-8 -*-
+import os, math, sqlite3, json, re, zipfile, tempfile
 from datetime import datetime, timedelta
-
+from io import BytesIO
 os.environ["KIVY_NO_CONSOLELOG"] = "1"
-
 from kivy.config import Config
 Config.set("kivy", "exit_on_escape", "0")
 Config.set("graphics", "width", "400")
-Config.set("graphics", "height", "700")
+Config.set("graphics", "height", "720")
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -23,992 +19,837 @@ from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
 from kivy.uix.progressbar import ProgressBar
-from kivy.uix.image import Image
-from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelHeader
-from kivy.uix.relativelayout import RelativeLayout
-from kivy.uix.anchorlayout import AnchorLayout
-from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse, Line
+from kivy.uix.floatlayout import FloatLayout
+from kivy.graphics import Color, Rectangle, RoundedRectangle, Line
 from kivy.core.window import Window
 from kivy.utils import get_color_from_hex
-from kivy.properties import (
-    NumericProperty, StringProperty, BooleanProperty,
-    ListProperty, ObjectProperty, ColorProperty
-)
+from kivy.metrics import dp, sp
 
 import database as db
-
 db.init_db()
 
+try:
+    from plyer import filechooser
+    HAS_FILECHOOSER = True
+except:
+    HAS_FILECHOOSER = False
 
-THEME = {
-    "bg": "#1A1A2E",
-    "surface": "#16213E",
-    "card": "#0F3460",
-    "primary": "#E94560",
-    "accent": "#FFD700",
-    "text": "#EEEEEE",
-    "text_secondary": "#AAAAAA",
-    "success": "#4CAF50",
-    "warning": "#FFC107",
-    "danger": "#F44336",
+C = {
+    "bg": "#2D2017", "surface": "#3D2D22", "card": "#4E3829",
+    "border": "#1A0F0A", "shadow": "#1A0F0A",
+    "primary": "#D4763A", "primary_dark": "#B8622E",
+    "success": "#6B8F5E", "warning": "#D4A94B", "danger": "#C45A4A",
+    "accent": "#8B6F9E", "text": "#F0E6D3", "text_sec": "#B8A89A",
+    "text_muted": "#7A6B5E", "gold": "#FFD700",
 }
+BW = 2
 
+def rgba(h, a=1):
+    c = get_color_from_hex(h); return (c[0], c[1], c[2], a)
 
-class RoundedButton(Button):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.background_color = (0, 0, 0, 0)
-        self.background_normal = ""
-        self.bind(pos=self.update_canvas, size=self.update_canvas)
+def pixel_canvas(widget, bg=None, border=True, shadow=True):
+    widget.bind(pos=lambda *a: _pixel_draw(widget, bg, border, shadow),
+                size=lambda *a: _pixel_draw(widget, bg, border, shadow))
 
-    def update_canvas(self, *args):
+def _pixel_draw(w, bg, border, shadow):
+    w.canvas.before.clear()
+    with w.canvas.before:
+        if shadow:
+            Color(*rgba(C["shadow"], 0.5))
+            Rectangle(pos=(w.x + dp(2), w.y - dp(2)), size=w.size)
+        if bg:
+            Color(*rgba(bg))
+            Rectangle(pos=w.pos, size=w.size)
+        if border:
+            Color(*rgba(C["border"]))
+            Rectangle(pos=w.pos, size=(w.width, dp(BW)))
+            Rectangle(pos=w.pos, size=(dp(BW), w.height))
+            Rectangle(pos=(w.x, w.y + w.height - dp(BW)), size=(w.width, dp(BW)))
+            Rectangle(pos=(w.x + w.width - dp(BW), w.y), size=(dp(BW), w.height))
+
+class MB(Button):
+    def __init__(self, text="", bg=C["primary"], fg=C["text"], **kw):
+        super().__init__(**kw)
+        self.text = text; self._bg = bg; self._fg = fg
+        self.font_size = dp(14); self.background_normal = ""
+        self.background_color = (0,0,0,0); self.color = rgba(fg)
+        self.size_hint_y = None; self.height = dp(44)
+        self.bind(pos=self._draw, size=self._draw)
+    def _draw(self, *a):
         self.canvas.before.clear()
         with self.canvas.before:
-            Color(*get_color_from_hex(self.theme_color if hasattr(self, 'theme_color') else THEME["primary"]))
-            RoundedRectangle(pos=self.pos, size=self.size, radius=[12])
+            Color(*rgba(C["shadow"], 0.5))
+            Rectangle(pos=(self.x + dp(2), self.y - dp(2)), size=self.size)
+            Color(*rgba(self._bg))
+            Rectangle(pos=self.pos, size=self.size)
+            Color(*rgba(C["border"]))
+            Rectangle(pos=self.pos, size=(self.width, dp(BW)))
+            Rectangle(pos=self.pos, size=(dp(BW), self.height))
+            Rectangle(pos=(self.x, self.y + self.height - dp(BW)), size=(self.width, dp(BW)))
+            Rectangle(pos=(self.x + self.width - dp(BW), self.y), size=(dp(BW), self.height))
 
+class ML(Label):
+    def __init__(self, text="", sz=15, col=C["text"], bd=False, **kw):
+        super().__init__(**kw)
+        self.text = text; self.font_size = dp(sz); self.color = rgba(col)
+        self.bold = bd; self.halign = "left"; self.valign = "middle"
+        self.text_size = (None, None)
 
-class RoundedInput(TextInput):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.background_color = (0, 0, 0, 0)
-        self.background_normal = ""
-        self.hint_text_color = get_color_from_hex(THEME["text_secondary"])
-        self.foreground_color = get_color_from_hex(THEME["text"])
-        self.cursor_color = get_color_from_hex(THEME["accent"])
-        self.padding = [15, 12]
-        self.font_size = 16
-        self.bind(pos=self.update_canvas, size=self.update_canvas)
-
-    def update_canvas(self, *args):
+class MC(BoxLayout):
+    def __init__(self, bg=None, **kw):
+        super().__init__(**kw)
+        self._bg = bg or C["card"]
+        self.orientation = "vertical"; self.padding = dp(16); self.spacing = dp(8)
+        self.size_hint_y = None
+        self.bind(pos=self._draw, size=self._draw)
+    def _draw(self, *a):
         self.canvas.before.clear()
         with self.canvas.before:
-            Color(0.1, 0.15, 0.25, 1)
-            RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
-            Color(0.3, 0.4, 0.6, 0.3)
-            Line(rounded_rectangle=self.pos + self.size + [10], width=1.5)
+            Color(*rgba(C["shadow"], 0.5))
+            Rectangle(pos=(self.x + dp(2), self.y - dp(2)), size=self.size)
+            Color(*rgba(self._bg))
+            Rectangle(pos=self.pos, size=self.size)
+            Color(*rgba(C["border"]))
+            Rectangle(pos=self.pos, size=(self.width, dp(BW)))
+            Rectangle(pos=self.pos, size=(dp(BW), self.height))
+            Rectangle(pos=(self.x, self.y + self.height - dp(BW)), size=(self.width, dp(BW)))
+            Rectangle(pos=(self.x + self.width - dp(BW), self.y), size=(dp(BW), self.height))
 
+class MI(TextInput):
+    def __init__(self, hint="", **kw):
+        super().__init__(**kw)
+        self.hint_text = hint; self.font_size = dp(14)
+        self.background_normal = ""; self.background_active = ""
+        self.background_color = (0,0,0,0)
+        self.foreground_color = rgba(C["text"])
+        self.hint_text_color = rgba(C["text_sec"])
+        self.cursor_color = rgba(C["primary"])
+        self.padding = [dp(12), dp(10)]; self.size_hint_y = None; self.height = dp(44)
+        self.bind(pos=self._draw, size=self._draw)
+    def _draw(self, *a):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(*rgba(C["shadow"], 0.4))
+            Rectangle(pos=(self.x + dp(2), self.y - dp(2)), size=self.size)
+            Color(*rgba(C["surface"]))
+            Rectangle(pos=self.pos, size=self.size)
+            Color(*rgba(C["border"]))
+            Rectangle(pos=self.pos, size=(self.width, dp(BW)))
+            Rectangle(pos=self.pos, size=(dp(BW), self.height))
+            Rectangle(pos=(self.x, self.y + self.height - dp(BW)), size=(self.width, dp(BW)))
+            Rectangle(pos=(self.x + self.width - dp(BW), self.y), size=(dp(BW), self.height))
 
-class StudyApp(App):
+class BGWidget(FloatLayout):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.bind(pos=self._draw, size=self._draw)
+    def _draw(self, *a):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(*rgba(C["bg"]))
+            Rectangle(pos=self.pos, size=self.size)
+
+class StudyMate(App):
     def build(self):
-        self.title = "StudyMate - 学习助手"
-        Window.clearcolor = get_color_from_hex(THEME["bg"])
+        self.title = "StudyMate"
+        Window.clearcolor = rgba(C["bg"])
         sm = ScreenManager()
         sm.add_widget(MainScreen(name="main"))
-        sm.add_widget(PomodoroScreen(name="pomodoro"))
+        sm.add_widget(PomoScreen(name="pomo"))
         sm.add_widget(TodoScreen(name="todo"))
-        sm.add_widget(EbookScreen(name="ebook"))
+        sm.add_widget(BookScreen(name="book"))
         sm.add_widget(TagScreen(name="tags"))
         sm.add_widget(GoalScreen(name="goals"))
         sm.add_widget(StatsScreen(name="stats"))
+        sm.add_widget(AchieveScreen(name="achieve"))
         return sm
+    def popup(self, title, msg):
+        l = BoxLayout(orientation="vertical", spacing=dp(15), padding=dp(20))
+        l.add_widget(ML(msg, sz=14, halign="center", text_size=(None, None)))
+        b = MB("OK", bg=C["primary"], fg=C["text"])
+        l.add_widget(b)
+        p = Popup(title=title, content=l, size_hint=(0.8, None), height=dp(200),
+                  background=C["surface"], separator_color=rgba(C["border"]),
+                  title_color=rgba(C["text"]))
+        b.bind(on_release=p.dismiss)
+        p.open()
 
-    def show_popup(self, title, content, btn_text="确定"):
-        layout = BoxLayout(orientation="vertical", spacing=15, padding=20)
-        layout.add_widget(Label(text=content, color=get_color_from_hex(THEME["text"]), font_size=15, halign="center"))
-        btn = Button(text=btn_text, size_hint_y=0.35, background_normal="",
-                      background_color=get_color_from_hex(THEME["primary"]), color=(1,1,1,1))
-        layout.add_widget(btn)
-        popup = Popup(title=title, content=layout, size_hint=(0.8, 0.4),
-                       background_color=get_color_from_hex(THEME["surface"]),
-                       separator_color=get_color_from_hex(THEME["primary"]),
-                       title_color=get_color_from_hex(THEME["accent"]))
-        btn.bind(on_release=popup.dismiss)
-        popup.open()
-
+surface_bg = C["surface"]
 
 class MainScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_ui()
-
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        f = BGWidget()
+        m = BoxLayout(orientation="vertical", spacing=dp(4), padding=[dp(20), dp(50), dp(20), dp(20)])
+        c = MC(bg=C["surface"])
+        c.add_widget(ML("StudyMate", sz=28, bd=True, col=C["primary"], halign="center", text_size=(None, None)))
+        self.xl = ML("0 XP", sz=14, col=C["text_sec"], halign="center", text_size=(None, None), size_hint_y=None, height=dp(20))
+        c.add_widget(self.xl)
+        self.sl = ML("Streak: 0 days", sz=13, col=C["text_muted"], halign="center", text_size=(None, None), size_hint_y=None, height=dp(18))
+        c.add_widget(self.sl)
+        m.add_widget(c)
+        m.add_widget(Label(size_hint_y=None, height=dp(16)))
+        for t, s, c2 in [("Pomodoro", "pomo", C["danger"]),("Tasks", "todo", C["warning"]),
+                        ("Books", "book", C["success"]),("Tags", "tags", C["accent"]),
+                        ("Goals", "goals", C["primary"]),("Stats", "achieve", "#79C0FF")]:
+            b = MB(t, bg=c2)
+            b.bind(on_release=lambda x, s=s: setattr(self.manager, "current", s))
+            m.add_widget(b)
+        f.add_widget(m); self.add_widget(f)
     def on_enter(self):
-        self.refresh()
+        self.xl.text = f"{db.get_total_xp()} XP"
+        self.sl.text = f"Streak: {calc_streak()} days"
 
-    def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
+def calc_streak():
+    conn = db.get_conn(); c = conn.cursor()
+    c.execute("SELECT DISTINCT date(created_at) d FROM xp_log ORDER BY d DESC")
+    days = [r['d'] for r in c.fetchall()]; conn.close()
+    if not days: return 0
+    t = datetime.now().date()
+    if days[0] != t.isoformat() and days[0] != (t - timedelta(1)).isoformat(): return 0
+    s = 1
+    for i in range(1, len(days)):
+        if (datetime.strptime(days[i-1],"%Y-%m-%d").date() - datetime.strptime(days[i],"%Y-%m-%d").date()).days == 1: s += 1
+        else: break
+    return s
 
-        header = BoxLayout(orientation="horizontal", size_hint_y=0.1)
-        title = Label(text="StudyMate", font_size=28, bold=True,
-                       color=get_color_from_hex(THEME["accent"]), halign="left")
-        header.add_widget(title)
-        self.xp_label = Label(text="0 XP", font_size=16, color=get_color_from_hex(THEME["text_secondary"]),
-                               size_hint_x=0.4, halign="right")
-        header.add_widget(self.xp_label)
-        layout.add_widget(header)
-
-        self.streak_label = Label(text="连续学习: 0 天", font_size=14,
-                                   color=get_color_from_hex(THEME["text_secondary"]), size_hint_y=0.05)
-        layout.add_widget(self.streak_label)
-
-        btn_style = {"size_hint_y": None, "height": 60, "font_size": 18,
-                      "background_normal": "", "color": (1,1,1,1)}
-
-        items = [
-            ("🍅  番茄钟", "pomodoro", THEME["primary"]),
-            ("📋  待办清单", "todo", "#E67E22"),
-            ("📚  电子书搜索", "ebook", "#2ECC71"),
-            ("🏷️  标签管理", "tags", "#9B59B6"),
-            ("🎯  学习目标", "goals", "#1ABC9C"),
-            ("📊  统计成就", "stats", "#3498DB"),
-        ]
-
-        scroll = ScrollView()
-        grid = GridLayout(cols=1, spacing=10, size_hint_y=None, padding=[0,5,0,5])
-        grid.bind(minimum_height=grid.setter("height"))
-
-        for text, screen, color in items:
-            btn = Button(text=text, **btn_style)
-            btn.background_color = get_color_from_hex(color)
-            btn.bind(on_release=lambda btn, s=screen: self.goto(s))
-            grid.add_widget(btn)
-
-        scroll.add_widget(grid)
-        layout.add_widget(scroll)
-        self.add_widget(layout)
-
-    def refresh(self):
-        total_xp = db.get_total_xp()
-        self.xp_label.text = f"{total_xp} XP"
-        streak = self.calc_streak()
-        self.streak_label.text = f"连续学习: {streak} 天"
-
-    def calc_streak(self):
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("SELECT DISTINCT date(created_at) d FROM xp_log ORDER BY d DESC")
-        days = [row['d'] for row in c.fetchall()]
-        conn.close()
-        if not days:
-            return 0
-        streak = 1
-        today = datetime.now().date()
-        if days[0] != today.isoformat():
-            if days[0] != (today - timedelta(1)).isoformat():
-                return 0
-        for i in range(1, len(days)):
-            d1 = datetime.strptime(days[i-1], "%Y-%m-%d").date()
-            d2 = datetime.strptime(days[i], "%Y-%m-%d").date()
-            if (d1 - d2).days == 1:
-                streak += 1
-            else:
-                break
-        return streak
-
-    def goto(self, screen):
-        self.manager.current = screen
-
-
-class PomodoroScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.work_min = int(db.get_setting("pomodoro_work", "25"))
-        self.break_min = int(db.get_setting("pomodoro_break", "5"))
-        self.remaining = self.work_min * 60
-        self.is_running = False
-        self.is_break = False
-        self.session_id = None
-        self.timer_event = None
-        self.build_ui()
-
-    def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=15, padding=20)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.3)
-        back.bind(on_release=lambda x: self.stop_timer() or setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="🍅 番茄钟", font_size=22, bold=True, color=get_color_from_hex(THEME["accent"])))
-        top.add_widget(Label(size_hint_x=0.3))
-        layout.add_widget(top)
-
-        self.status_label = Label(text="专注时间", font_size=18, color=get_color_from_hex(THEME["text"]), size_hint_y=0.06)
-        layout.add_widget(self.status_label)
-
-        self.timer_label = Label(text=self.format_time(self.remaining), font_size=72, bold=True,
-                                  color=get_color_from_hex(THEME["primary"]), size_hint_y=0.3)
-        layout.add_widget(self.timer_label)
-
-        circle_box = BoxLayout(orientation="horizontal", size_hint_y=0.1)
-        self.progress = ProgressBar(max=1, value=1, size_hint=(0.8, 0.4))
-        self.progress.color = get_color_from_hex(THEME["primary"])
-        circle_box.add_widget(self.progress)
-        layout.add_widget(circle_box)
-
-        btn_box = BoxLayout(orientation="horizontal", spacing=20, size_hint_y=0.12)
-        self.start_btn = Button(text="▶ 开始", font_size=20, background_normal="",
-                                 background_color=get_color_from_hex(THEME["success"]), color=(1,1,1,1))
-        self.start_btn.bind(on_release=self.toggle_timer)
-        btn_box.add_widget(self.start_btn)
-
-        self.reset_btn = Button(text="↺ 重置", font_size=20, background_normal="",
-                                 background_color=get_color_from_hex(THEME["danger"]), color=(1,1,1,1))
-        self.reset_btn.bind(on_release=self.reset_timer)
-        btn_box.add_widget(self.reset_btn)
-        layout.add_widget(btn_box)
-
-        setting_box = BoxLayout(orientation="horizontal", spacing=10, size_hint_y=0.1)
-        setting_box.add_widget(Label(text="专注:", font_size=14, color=get_color_from_hex(THEME["text"]), size_hint_x=0.2))
-        self.work_input = RoundedInput(text=str(self.work_min), input_filter="int", size_hint_x=0.15, font_size=16)
-        setting_box.add_widget(self.work_input)
-        setting_box.add_widget(Label(text="分钟", font_size=14, color=get_color_from_hex(THEME["text"]), size_hint_x=0.2))
-        setting_box.add_widget(Label(text="休息:", font_size=14, color=get_color_from_hex(THEME["text"]), size_hint_x=0.2))
-        self.break_input = RoundedInput(text=str(self.break_min), input_filter="int", size_hint_x=0.15, font_size=16)
-        setting_box.add_widget(self.break_input)
-        setting_box.add_widget(Label(text="分钟", font_size=14, color=get_color_from_hex(THEME["text"]), size_hint_x=0.2))
-        layout.add_widget(setting_box)
-
-        apply_btn = Button(text="应用设置", font_size=14, size_hint_y=0.06, background_normal="",
-                            background_color=get_color_from_hex(THEME["card"]), color=(1,1,1,1))
-        apply_btn.bind(on_release=self.apply_settings)
-        layout.add_widget(apply_btn)
-
-        self.daily_count_label = Label(text="今日完成: 0 个番茄钟", font_size=14,
-                                        color=get_color_from_hex(THEME["text_secondary"]), size_hint_y=0.06)
-        layout.add_widget(self.daily_count_label)
-
-        self.add_widget(layout)
-
-    def format_time(self, seconds):
-        m, s = divmod(seconds, 60)
-        return f"{m:02d}:{s:02d}"
-
-    def toggle_timer(self, btn):
-        if not self.is_running:
-            if not self.session_id:
-                conn = db.get_conn()
-                c = conn.cursor()
-                c.execute("INSERT INTO pomodoro_sessions (duration_minutes, break_minutes) VALUES (?,?)",
-                          (self.work_min, self.break_min))
-                conn.commit()
-                self.session_id = c.lastrowid
-                conn.close()
-            self.is_running = True
-            self.timer_event = Clock.schedule_interval(self.tick, 1)
-            self.start_btn.text = "⏸ 暂停"
-            self.start_btn.background_color = get_color_from_hex(THEME["warning"])
+class PomoScreen(Screen):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.w = int(db.get_setting("pw","25"))
+        self.b = int(db.get_setting("pb","5"))
+        self.rem = self.w*60; self.rn=False; self.bk=False; self.sid=None; self.te=None
+        f = BGWidget()
+        m = BoxLayout(orientation="vertical", spacing=dp(6), padding=[dp(20), dp(30), dp(20), dp(20)])
+        h = BoxLayout(size_hint_y=None, height=dp(40))
+        bb = MB("Back", bg=C["card"], size_hint_x=0.3)
+        bb.bind(on_release=lambda x: self._stop() or setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Pomodoro", sz=20, bd=True, col=C["danger"], halign="center", text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.3))
+        m.add_widget(h)
+        self.sl = ML("Focus Time", sz=16, col=C["text"], halign="center", text_size=(None,None), size_hint_y=None, height=dp(24))
+        m.add_widget(self.sl)
+        self.tl = ML(self._f(self.rem), sz=64, bd=True, col=C["danger"], halign="center", text_size=(None,None), size_hint_y=None, height=dp(80))
+        m.add_widget(self.tl)
+        self.pb = ProgressBar(max=1, value=1, size_hint_y=None, height=dp(6))
+        m.add_widget(self.pb)
+        bx = BoxLayout(spacing=dp(16), size_hint_y=None, height=dp(50))
+        self.sb = MB("Start", bg=C["success"])
+        self.sb.bind(on_release=self._tog)
+        bx.add_widget(self.sb)
+        rb = MB("Reset", bg=C["danger"])
+        rb.bind(on_release=self._rst)
+        bx.add_widget(rb)
+        m.add_widget(bx)
+        m.add_widget(Label(size_hint_y=None, height=dp(8)))
+        self.dc = ML("Today: 0", sz=13, col=C["text_sec"], halign="center", text_size=(None,None), size_hint_y=None, height=dp(18))
+        m.add_widget(self.dc)
+        f.add_widget(m); self.add_widget(f)
+    def _f(self, s): return f"{s//60:02d}:{s%60:02d}"
+    def _tog(self, *a):
+        if not self.rn:
+            if not self.sid:
+                conn=db.get_conn();c=conn.cursor()
+                c.execute("INSERT INTO pomodoro_sessions (duration_minutes, break_minutes) VALUES(?,?)",(self.w,self.b))
+                conn.commit();self.sid=c.lastrowid;conn.close()
+            self.rn=True;self.te=Clock.schedule_interval(self._tk,1)
+            self.sb.text="Pause";self.sb._bg=C["warning"];self.sb._draw()
         else:
-            self.is_running = False
-            if self.timer_event:
-                self.timer_event.cancel()
-            self.start_btn.text = "▶ 继续"
-            self.start_btn.background_color = get_color_from_hex(THEME["success"])
-
-    def tick(self, dt):
-        self.remaining -= 1
-        self.timer_label.text = self.format_time(self.remaining)
-        total = (self.break_min * 60) if self.is_break else (self.work_min * 60)
-        self.progress.value = self.remaining / total
-
-        if self.remaining <= 0:
-            self.timer_complete()
-
-    def timer_complete(self):
-        if self.timer_event:
-            self.timer_event.cancel()
-        self.is_running = False
-
-        if not self.is_break:
-            conn = db.get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE pomodoro_sessions SET completed=1, ended_at=datetime('now','localtime') WHERE id=?",
-                      (self.session_id,))
-            conn.commit()
-            conn.close()
-            db.add_xp("pomodoro", self.session_id, 10)
-            self.session_id = None
-
-            App.get_running_app().show_popup("🎉 太棒了！", f"完成了一个番茄钟！获得 10 XP")
-            self.is_break = True
-            self.remaining = self.break_min * 60
-            self.status_label.text = "☕ 休息时间"
-            self.status_label.color = get_color_from_hex(THEME["success"])
-            self.timer_label.color = get_color_from_hex(THEME["success"])
+            self.rn=False
+            if self.te:self.te.cancel()
+            self.sb.text="Resume";self.sb._bg=C["success"];self.sb._draw()
+    def _tk(self,dt):
+        self.rem-=1;self.tl.text=self._f(self.rem)
+        t=self.b*60 if self.bk else self.w*60
+        self.pb.value=self.rem/t
+        if self.rem<=0:self._done()
+    def _done(self):
+        if self.te:self.te.cancel();self.rn=False
+        if not self.bk:
+            conn=db.get_conn();c=conn.cursor()
+            c.execute("UPDATE pomodoro_sessions SET completed=1,ended_at=datetime('now','localtime') WHERE id=?",(self.sid,))
+            conn.commit();conn.close()
+            db.add_xp("pomo",self.sid,10);self.sid=None
+            self.bk=True;self.rem=self.b*60
+            self.sl.text="Break Time";self.sl.color=rgba(C["success"])
+            self.tl.color=rgba(C["success"])
         else:
-            self.is_break = False
-            self.remaining = self.work_min * 60
-            self.status_label.text = "专注时间"
-            self.status_label.color = get_color_from_hex(THEME["text"])
-            self.timer_label.color = get_color_from_hex(THEME["primary"])
-            App.get_running_app().show_popup("⏰ 休息结束", "开始新的专注周期吧！")
-
-        self.progress.value = 1
-        self.timer_label.text = self.format_time(self.remaining)
-        self.start_btn.text = "▶ 开始"
-        self.start_btn.background_color = get_color_from_hex(THEME["success"])
-        self.update_daily_count()
-
-    def reset_timer(self, btn=None):
-        self.stop_timer()
-        self.is_break = False
-        self.remaining = self.work_min * 60
-        self.session_id = None
-        self.timer_label.text = self.format_time(self.remaining)
-        self.progress.value = 1
-        self.status_label.text = "专注时间"
-        self.status_label.color = get_color_from_hex(THEME["text"])
-        self.timer_label.color = get_color_from_hex(THEME["primary"])
-        self.start_btn.text = "▶ 开始"
-        self.start_btn.background_color = get_color_from_hex(THEME["success"])
-
-    def stop_timer(self):
-        self.is_running = False
-        if self.timer_event:
-            self.timer_event.cancel()
-            self.timer_event = None
-
-    def apply_settings(self, btn=None):
-        try:
-            w = int(self.work_input.text)
-            b = int(self.break_input.text)
-            if w < 1 or b < 1:
-                raise ValueError
-            self.work_min = w
-            self.break_min = b
-            db.set_setting("pomodoro_work", str(w))
-            db.set_setting("pomodoro_break", str(b))
-            self.reset_timer()
-            App.get_running_app().show_popup("设置已保存", f"专注 {w} 分钟 / 休息 {b} 分钟")
-        except:
-            App.get_running_app().show_popup("错误", "请输入有效数字")
-
-    def update_daily_count(self):
-        conn = db.get_conn()
-        c = conn.cursor()
+            self.bk=False;self.rem=self.w*60
+            self.sl.text="Focus Time";self.sl.color=rgba(C["text"])
+            self.tl.color=rgba(C["danger"])
+        self.pb.value=1;self.tl.text=self._f(self.rem)
+        self.sb.text="Start";self.sb._bg=C["success"];self.sb._draw()
+        self._up()
+    def _rst(self,*a):
+        self._stop();self.bk=False;self.rem=self.w*60;self.sid=None
+        self.tl.text=self._f(self.rem);self.pb.value=1
+        self.sl.text="Focus Time";self.sl.color=rgba(C["text"])
+        self.tl.color=rgba(C["danger"])
+        self.sb.text="Start";self.sb._bg=C["success"];self.sb._draw()
+    def _stop(self):
+        self.rn=False
+        if self.te:self.te.cancel();self.te=None
+    def _up(self):
+        conn=db.get_conn();c=conn.cursor()
         c.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE completed=1 AND date(ended_at)=date('now','localtime')")
-        count = c.fetchone()[0]
-        conn.close()
-        self.daily_count_label.text = f"今日完成: {count} 个番茄钟"
-
-    def on_enter(self):
-        self.update_daily_count()
-
+        self.dc.text=f"Today: {c.fetchone()[0]}";conn.close()
+    def on_enter(self):self._up()
 
 class TodoScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_ui()
-
-    def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        back.bind(on_release=lambda x: setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="📋 待办清单", font_size=22, bold=True, color=get_color_from_hex(THEME["accent"])))
-        top.add_widget(Label(size_hint_x=0.25))
-        layout.add_widget(top)
-
-        input_box = BoxLayout(orientation="horizontal", size_hint_y=0.08, spacing=8)
-        self.task_input = RoundedInput(hint_text="输入新任务...", size_hint_x=0.7, font_size=15)
-        input_box.add_widget(self.task_input)
-        add_btn = Button(text="添加", font_size=16, background_normal="",
-                          background_color=get_color_from_hex(THEME["success"]), color=(1,1,1,1), size_hint_x=0.3)
-        add_btn.bind(on_release=self.add_task)
-        input_box.add_widget(add_btn)
-        layout.add_widget(input_box)
-
-        filter_box = BoxLayout(orientation="horizontal", size_hint_y=0.06, spacing=5)
-        self.filter_all = Button(text="全部", font_size=13, background_normal="",
-                                  background_color=get_color_from_hex(THEME["primary"]), color=(1,1,1,1))
-        self.filter_pending = Button(text="待办", font_size=13, background_normal="",
-                                      background_color=get_color_from_hex(THEME["card"]), color=(1,1,1,1))
-        self.filter_done = Button(text="已完成", font_size=13, background_normal="",
-                                   background_color=get_color_from_hex(THEME["card"]), color=(1,1,1,1))
-        self.filter_all.bind(on_release=lambda x: self.load_tasks("all"))
-        self.filter_pending.bind(on_release=lambda x: self.load_tasks("pending"))
-        self.filter_done.bind(on_release=lambda x: self.load_tasks("done"))
-        filter_box.add_widget(self.filter_all)
-        filter_box.add_widget(self.filter_pending)
-        filter_box.add_widget(self.filter_done)
-        layout.add_widget(filter_box)
-
-        self.scroll = ScrollView()
-        self.task_list = GridLayout(cols=1, spacing=6, size_hint_y=None, padding=[0,5,0,5])
-        self.task_list.bind(minimum_height=self.task_list.setter("height"))
-        self.scroll.add_widget(self.task_list)
-        layout.add_widget(self.scroll)
-
-        self.current_filter = "all"
-        self.add_widget(layout)
-
-    def add_task(self, btn=None):
-        title = self.task_input.text.strip()
-        if not title:
+    def __init__(self,**kw):
+        super().__init__(**kw)
+        self.fl="all"
+        f=BGWidget()
+        m=BoxLayout(orientation="vertical",spacing=dp(4),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Tasks",sz=20,bd=True,col=C["warning"],halign="center",text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.25))
+        m.add_widget(h)
+        bx=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(48))
+        self.inp=MI(hint="New task...")
+        bx.add_widget(self.inp)
+        ab=MB("Add",bg=C["success"],size_hint_x=0.25,height=dp(48))
+        ab.bind(on_release=self._add)
+        bx.add_widget(ab)
+        m.add_widget(bx)
+        fbx=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(36))
+        self.fa=MB("All",bg=C["primary"],fg=C["text"],height=dp(36))
+        self.fp=MB("Pending",bg=C["card"],fg=C["text_sec"],height=dp(36))
+        self.fd=MB("Done",bg=C["card"],fg=C["text_sec"],height=dp(36))
+        self.fa.bind(on_release=lambda x:self._ld("all"))
+        self.fp.bind(on_release=lambda x:self._ld("pending"))
+        self.fd.bind(on_release=lambda x:self._ld("done"))
+        fbx.add_widget(self.fa);fbx.add_widget(self.fp);fbx.add_widget(self.fd)
+        m.add_widget(fbx)
+        sv=ScrollView();self.gl=GridLayout(cols=1,spacing=dp(6),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        sv.add_widget(self.gl);m.add_widget(sv)
+        f.add_widget(m);self.add_widget(f)
+    def _add(self,*a):
+        t=self.inp.text.strip()
+        if not t:return
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("INSERT INTO tasks (title) VALUES(?)",(t,));conn.commit();conn.close()
+        self.inp.text="";self._ld(self.fl)
+    def _ld(self,f=None):
+        if f:self.fl=f
+        self.gl.clear_widgets()
+        for b in [self.fa,self.fp,self.fd]:b._bg=C["card"];b._draw()
+        [self.fa,self.fp,self.fd][["all","pending","done"].index(self.fl)]._bg=C["primary_dark"]
+        conn=db.get_conn();c=conn.cursor()
+        if self.fl=="all":c.execute("SELECT * FROM tasks ORDER BY status='pending' DESC, created_at DESC")
+        else:c.execute("SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC",(self.fl,))
+        ts=c.fetchall();conn.close()
+        if not ts:
+            self.gl.add_widget(ML("No tasks yet",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(60)))
             return
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("INSERT INTO tasks (title) VALUES (?)", (title,))
-        conn.commit()
-        conn.close()
-        self.task_input.text = ""
-        self.load_tasks(self.current_filter)
+        for t in ts:self.gl.add_widget(TodoCard(t))
+    def on_enter(self):self._ld()
 
-    def load_tasks(self, filter_type="all"):
-        self.current_filter = filter_type
-        self.task_list.clear_widgets()
-        for b in [self.filter_all, self.filter_pending, self.filter_done]:
-            b.background_color = get_color_from_hex(THEME["card"])
-        {
-            "all": self.filter_all,
-            "pending": self.filter_pending,
-            "done": self.filter_done,
-        }[filter_type].background_color = get_color_from_hex(THEME["primary"])
-
-        conn = db.get_conn()
-        c = conn.cursor()
-        if filter_type == "all":
-            c.execute("SELECT * FROM tasks ORDER BY status='pending' DESC, created_at DESC")
-        else:
-            c.execute("SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC", (filter_type,))
-        tasks = c.fetchall()
-        conn.close()
-
-        if not tasks:
-            self.task_list.add_widget(Label(text="暂无任务，添加一个吧 📝", color=get_color_from_hex(THEME["text_secondary"]),
-                                             font_size=15, size_hint_y=None, height=60))
-            return
-
-        for t in tasks:
-            self.task_list.add_widget(TaskCard(t))
-
-    def on_enter(self):
-        self.load_tasks()
-
-
-class TaskCard(BoxLayout):
-    def __init__(self, task, **kwargs):
-        super().__init__(**kwargs)
-        self.task_id = task['id']
-        self.orientation = "horizontal"
-        self.size_hint_y = None
-        self.height = 60
-        self.spacing = 8
-        self.padding = [10, 5]
-
+class TodoCard(BoxLayout):
+    def __init__(self,t,**kw):
+        super().__init__(**kw)
+        self.tid=t['id']
+        self.orientation="horizontal";self.spacing=dp(8);self.padding=[dp(10),dp(6)]
+        self.size_hint_y=None;self.height=dp(56)
+        self.bind(pos=self._draw,size=self._draw)
+        d=t['status']=='done'
+        self.cb=MB("✅" if d else "⬜",bg=C["card"],fg=C["text"],size_hint_x=0.13,height=dp(44))
+        self.cb.bind(on_release=self._tog)
+        self.add_widget(self.cb)
+        txt=t['title'][:28]+".." if len(t['title'])>28 else t['title']
+        self.lb=ML(txt,sz=15,col=C["text_sec"] if d else C["text"])
+        self.add_widget(self.lb)
+        xb=MB("✕",bg=C["danger"],fg=C["text"],size_hint_x=0.13,height=dp(44))
+        xb.bind(on_release=self._del)
+        self.add_widget(xb)
+    def _draw(self,*a):
+        self.canvas.before.clear()
         with self.canvas.before:
-            Color(*get_color_from_hex(THEME["surface"]))
-            RoundedRectangle(pos=self.pos, size=self.size, radius=[8])
-
-        is_done = task['status'] == 'done'
-        done_btn = Button(text="✅" if is_done else "⬜", font_size=18,
-                           size_hint_x=0.12, background_normal="", color=(1,1,1,1))
-        done_btn.bind(on_release=self.toggle_done)
-        self.add_widget(done_btn)
-
-        title = task['title']
-        if len(title) > 30:
-            title = title[:30] + "..."
-        lbl = Label(text=title, font_size=15, color=get_color_from_hex(THEME["text"]),
-                     halign="left", valign="middle", size_hint_x=0.6)
-        lbl.bind(size=lbl.setter("text_size"))
-        if is_done:
-            lbl.color = get_color_from_hex(THEME["text_secondary"])
-        self.add_widget(lbl)
-
-        del_btn = Button(text="✕", font_size=16, size_hint_x=0.12,
-                          background_normal="", color=get_color_from_hex(THEME["danger"]))
-        del_btn.bind(on_release=self.delete_task)
-        self.add_widget(del_btn)
-
-    def toggle_done(self, btn):
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("SELECT status FROM tasks WHERE id=?", (self.task_id,))
-        row = c.fetchone()
-        if row['status'] == 'done':
-            c.execute("UPDATE tasks SET status='pending', completed_at=NULL WHERE id=?", (self.task_id,))
+            Color(*rgba(C["shadow"],0.4))
+            Rectangle(pos=(self.x+dp(2),self.y-dp(2)),size=self.size)
+            Color(*rgba(C["surface"]))
+            Rectangle(pos=self.pos,size=self.size)
+            Color(*rgba(C["border"]))
+            Rectangle(pos=self.pos,size=(self.width,dp(1)))
+            Rectangle(pos=self.pos,size=(dp(1),self.height))
+            Rectangle(pos=(self.x,self.y+self.height-dp(1)),size=(self.width,dp(1)))
+            Rectangle(pos=(self.x+self.width-dp(1),self.y),size=(dp(1),self.height))
+    def _tog(self,*a):
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT status FROM tasks WHERE id=?",(self.tid,))
+        r=c.fetchone()
+        if r['status']=='done':
+            c.execute("UPDATE tasks SET status='pending',completed_at=NULL WHERE id=?",(self.tid,))
+            self.cb.text="⬜"
         else:
-            c.execute("UPDATE tasks SET status='done', completed_at=datetime('now','localtime') WHERE id=?",
-                      (self.task_id,))
-            db.add_xp("task", self.task_id, 5)
-        conn.commit()
-        conn.close()
-        App.get_running_app().root.get_screen("todo").load_tasks(
-            App.get_running_app().root.get_screen("todo").current_filter
-        )
+            c.execute("UPDATE tasks SET status='done',completed_at=datetime('now','localtime') WHERE id=?",(self.tid,))
+            db.add_xp("task",self.tid,5)
+            self.cb.text="✅"
+        conn.commit();conn.close()
+        App.get_running_app().root.get_screen("todo")._ld()
+    def _del(self,*a):
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("DELETE FROM tasks WHERE id=?",(self.tid,));conn.commit();conn.close()
+        App.get_running_app().root.get_screen("todo")._ld()
 
-    def delete_task(self, btn):
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("DELETE FROM tasks WHERE id=?", (self.task_id,))
-        conn.commit()
-        conn.close()
-        App.get_running_app().root.get_screen("todo").load_tasks(
-            App.get_running_app().root.get_screen("todo").current_filter
-        )
-
-
-class EbookScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_ui()
-
-    def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        back.bind(on_release=lambda x: setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="📚 电子书搜索", font_size=22, bold=True, color=get_color_from_hex(THEME["accent"])))
-        top.add_widget(Label(size_hint_x=0.25))
-        layout.add_widget(top)
-
-        search_box = BoxLayout(orientation="horizontal", size_hint_y=0.08, spacing=8)
-        self.search_input = RoundedInput(hint_text="搜索关键词...", size_hint_x=0.7, font_size=15)
-        search_box.add_widget(self.search_input)
-        search_btn = Button(text="🔍 搜索", font_size=15, background_normal="",
-                             background_color=get_color_from_hex(THEME["primary"]), color=(1,1,1,1), size_hint_x=0.3)
-        search_btn.bind(on_release=self.do_search)
-        search_box.add_widget(search_btn)
-        layout.add_widget(search_box)
-
-        self.scroll = ScrollView()
-        self.result_list = GridLayout(cols=1, spacing=6, size_hint_y=None, padding=[0,5,0,5])
-        self.result_list.bind(minimum_height=self.result_list.setter("height"))
-        self.scroll.add_widget(self.result_list)
-        layout.add_widget(self.scroll)
-        self.add_widget(layout)
-
-    def do_search(self, btn=None):
-        keyword = self.search_input.text.strip().lower()
-        self.result_list.clear_widgets()
-        if not keyword:
-            self.result_list.add_widget(Label(text="请输入搜索关键词", color=get_color_from_hex(THEME["text_secondary"]),
-                                               font_size=15, size_hint_y=None, height=60))
+class BookScreen(Screen):
+    def __init__(self,**kw):
+        super().__init__(**kw)
+        f=BGWidget()
+        m=BoxLayout(orientation="vertical",spacing=dp(6),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Books",sz=20,bd=True,col=C["success"],halign="center",text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.25))
+        m.add_widget(h)
+        bx=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(48))
+        self.inp=MI(hint="Search title or online...")
+        bx.add_widget(self.inp)
+        sb=MB("Search",bg=C["success"],fg=C["text"],size_hint_x=0.22,height=dp(48))
+        sb.bind(on_release=self._srch)
+        bx.add_widget(sb)
+        ib=MB("Import",bg=C["accent"],fg=C["text"],size_hint_x=0.18,height=dp(48))
+        ib.bind(on_release=self._imp)
+        bx.add_widget(ib)
+        m.add_widget(bx)
+        tb=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(36))
+        self.tb1=MB("Local",bg=C["primary"],fg=C["text"],height=dp(36))
+        self.tb2=MB("Online",bg=C["card"],fg=C["text_sec"],height=dp(36))
+        self._mode="local"
+        self.tb1.bind(on_release=lambda x:self._sw("local"))
+        self.tb2.bind(on_release=lambda x:self._sw("online"))
+        tb.add_widget(self.tb1);tb.add_widget(self.tb2)
+        m.add_widget(tb)
+        sv=ScrollView();self.gl=GridLayout(cols=1,spacing=dp(6),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        sv.add_widget(self.gl);m.add_widget(sv)
+        f.add_widget(m);self.add_widget(f)
+    def _sw(self,mode):
+        self._mode=mode
+        self.tb1._bg=C["primary"] if mode=="local" else C["card"]
+        self.tb2._bg=C["primary"] if mode=="online" else C["card"]
+        self.tb1._draw();self.tb2._draw()
+        self.gl.clear_widgets()
+        if mode=="local":self._list_books()
+        else:self.gl.add_widget(ML("Enter keywords and tap Search",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
+    def _list_books(self):
+        self.gl.clear_widgets()
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT * FROM books ORDER BY added_at DESC")
+        bs=c.fetchall();conn.close()
+        if not bs:
+            self.gl.add_widget(ML("No books imported yet",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
             return
-
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("SELECT * FROM books WHERE LOWER(title) LIKE ? OR LOWER(author) LIKE ?",
-                  (f"%{keyword}%", f"%{keyword}%"))
-        books = c.fetchall()
-
-        found = False
-        for book in books:
-            found = True
-            card = BoxLayout(orientation="vertical", size_hint_y=None, height=80, padding=[10,5])
-            with card.canvas.before:
-                Color(*get_color_from_hex(THEME["surface"]))
-                RoundedRectangle(pos=card.pos, size=card.size, radius=[8])
-            card.add_widget(Label(text=f"📖 {book['title']}", font_size=16, color=get_color_from_hex(THEME["accent"]),
-                                   halign="left", size_hint_y=0.5))
-            author = book['author'] or "未知作者"
-            path = book['file_path'].split("\\")[-1].split("/")[-1]
-            card.add_widget(Label(text=f"作者: {author}  |  文件: {path}", font_size=12,
-                                   color=get_color_from_hex(THEME["text_secondary"]), halign="left", size_hint_y=0.4))
-            self.result_list.add_widget(card)
-
-        self.result_list.add_widget(Label(text="", size_hint_y=None, height=10))
-
-        c.execute("""
-            SELECT DISTINCT t.name FROM tags t
-            JOIN book_tags bt ON t.id = bt.tag_id
-            WHERE bt.book_id IN (SELECT id FROM books WHERE LOWER(title) LIKE ? OR LOWER(author) LIKE ?)
-        """, (f"%{keyword}%", f"%{keyword}%"))
-        tags = [row['name'] for row in c.fetchall()]
-        if tags:
-            tag_lbl = Label(text=f"相关标签: {' '.join(tags)}", font_size=13,
-                             color=get_color_from_hex(THEME["text_secondary"]), size_hint_y=None, height=30)
-            self.result_list.add_widget(tag_lbl)
+        for bk in bs:
+            cd=MC()
+            cd.add_widget(ML(bk['title'],sz=16,bd=True,col=C["success"]))
+            a=bk['author'] or "Unknown"
+            cd.add_widget(ML(f"Author: {a}",sz=13,col=C["text_sec"]))
+            self.gl.add_widget(cd)
+    def _srch(self,*a):
+        kw=self.inp.text.strip().lower()
+        self.gl.clear_widgets()
+        if not kw:
+            self.gl.add_widget(ML("Enter a keyword",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
+            return
+        if self._mode=="online":
+            self._search_web(kw)
+        else:
+            self._search_local(kw)
+    def _search_local(self,kw):
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT * FROM books WHERE LOWER(title) LIKE ? OR LOWER(author) LIKE ?",(f"%{kw}%",f"%{kw}%"))
+        bs=c.fetchall()
+        if not bs:
+            c.execute("SELECT DISTINCT b.* FROM books b JOIN book_content bc ON b.id=bc.book_id WHERE bc.content LIKE ?",(f"%{kw}%",))
+            bs=c.fetchall()
         conn.close()
-
-        if not found:
-            self.result_list.add_widget(Label(text="未找到匹配的电子书", color=get_color_from_hex(THEME["text_secondary"]),
-                                               font_size=15, size_hint_y=None, height=60))
-
-    def show_full_search(self, book_id):
-        App.get_running_app().show_popup("全文搜索", "正在开发全文搜索功能...\n目前支持按书名和作者搜索")
-
+        if not bs:
+            self.gl.add_widget(ML("No matches found",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
+            return
+        for bk in bs:
+            cd=MC()
+            cd.add_widget(ML(bk['title'],sz=16,bd=True,col=C["success"]))
+            a=bk['author'] or "Unknown"
+            cd.add_widget(ML(f"Author: {a}",sz=13,col=C["text_sec"]))
+            self.gl.add_widget(cd)
+    def _search_web(self,kw):
+        self.gl.add_widget(ML("Searching online...",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
+        try:
+            import urllib.request
+            url=f"https://www.googleapis.com/books/v1/volumes?q={urllib.request.quote(kw)}&maxResults=10&langRestrict=zh-CN"
+            r=urllib.request.urlopen(url,timeout=10)
+            data=json.loads(r.read())
+            self.gl.clear_widgets()
+            items=data.get('items',[])
+            if not items:
+                self.gl.add_widget(ML("No results found",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
+                return
+            for item in items:
+                vi=item.get('volumeInfo',{})
+                cd=MC()
+                t=vi.get('title','Untitled')
+                cd.add_widget(ML(t,sz=16,bd=True,col=C["success"]))
+                aus=', '.join(vi.get('authors',['Unknown']))
+                cd.add_widget(ML(f"Author: {aus}",sz=13,col=C["text_sec"]))
+                desc=vi.get('description','')
+                if desc:
+                    cd.add_widget(ML(desc[:80]+"...",sz=12,col=C["text_muted"]))
+                self.gl.add_widget(cd)
+        except Exception as e:
+            self.gl.clear_widgets()
+            self.gl.add_widget(ML(f"Search failed: {str(e)[:40]}",sz=14,col=C["danger"],halign="center",size_hint_y=None,height=dp(50)))
+    def _imp(self,*a):
+        if not HAS_FILECHOOSER:
+            self._manual_import()
+            return
+        try:
+            filechooser.open_file(on_selection=self._file_selected)
+        except:
+            self._manual_import()
+    def _manual_import(self):
+        l=BoxLayout(orientation="vertical",spacing=dp(12),padding=dp(16))
+        l.add_widget(ML("Title:",sz=14,col=C["text"]))
+        ti=MI(hint="Enter title")
+        l.add_widget(ti)
+        l.add_widget(ML("Author:",sz=14,col=C["text"]))
+        ai=MI(hint="Enter author")
+        l.add_widget(ai)
+        p=Popup(title="Import Book",content=l,size_hint=(0.85,0.45),background=C["surface"],
+                separator_color=rgba(C["border"]),title_color=rgba(C["text"]))
+        def sv(*a):
+            t=ti.text.strip() or "Untitled"
+            a2=ai.text.strip() or "Unknown"
+            conn=db.get_conn();c=conn.cursor()
+            c.execute("INSERT INTO books (title,author,file_path) VALUES(?,?,?)",(t,a2,"manual"))
+            conn.commit();conn.close()
+            p.dismiss();self._list_books()
+            App.get_running_app().popup("Success",f"Added: {t}")
+        bb=BoxLayout(spacing=dp(12),size_hint_y=None,height=dp(44))
+        svb=MB("Save",bg=C["success"],fg=C["text"])
+        svb.bind(on_release=sv)
+        bb.add_widget(svb)
+        cvb=MB("Cancel",bg=C["danger"],fg=C["text"])
+        cvb.bind(on_release=p.dismiss)
+        bb.add_widget(cvb)
+        l.add_widget(bb);p.open()
+    def _file_selected(self,selection):
+        if not selection:return
+        path=selection[0]
+        name=os.path.splitext(os.path.basename(path))[0]
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("INSERT INTO books (title,file_path) VALUES(?,?)",(name,path))
+        bid=c.lastrowid
+        content=""
+        try:
+            if path.endswith('.txt'):
+                with open(path,'r',encoding='utf-8',errors='replace') as f:
+                    content=f.read()
+            elif path.endswith('.epub'):
+                try:
+                    import html2text
+                    with zipfile.ZipFile(path) as z:
+                        for fn in z.namelist():
+                            if fn.endswith('.xhtml') or fn.endswith('.html'):
+                                html=z.read(fn).decode('utf-8',errors='replace')
+                                content+=html2text.html2text(html)
+                except:
+                    pass
+            if content:
+                c.execute("INSERT INTO book_content (book_id,content) VALUES(?,?)",(bid,content[:50000]))
+        except:
+            pass
+        conn.commit();conn.close()
+        self._list_books()
+        App.get_running_app().popup("Success",f"Imported: {name}")
+    def on_enter(self):
+        self.gl.clear_widgets()
+        if self._mode=="local":self._list_books()
+        else:self.gl.add_widget(ML("Enter keywords and tap Search",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(50)))
 
 class TagScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_ui()
-
-    def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        back.bind(on_release=lambda x: setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="🏷️ 标签管理", font_size=22, bold=True, color=get_color_from_hex(THEME["accent"])))
-        top.add_widget(Label(size_hint_x=0.25))
-        layout.add_widget(top)
-
-        input_box = BoxLayout(orientation="horizontal", size_hint_y=0.08, spacing=8)
-        self.tag_input = RoundedInput(hint_text="输入标签名称...", size_hint_x=0.6, font_size=15)
-        input_box.add_widget(self.tag_input)
-        add_btn = Button(text="添加", font_size=16, background_normal="",
-                          background_color=get_color_from_hex(THEME["success"]), color=(1,1,1,1), size_hint_x=0.2)
-        add_btn.bind(on_release=self.add_tag)
-        input_box.add_widget(add_btn)
-        layout.add_widget(input_box)
-
-        self.scroll = ScrollView()
-        self.tag_list = GridLayout(cols=2, spacing=8, size_hint_y=None, padding=[0,5,0,5])
-        self.tag_list.bind(minimum_height=self.tag_list.setter("height"))
-        self.scroll.add_widget(self.tag_list)
-        layout.add_widget(self.scroll)
-        self.add_widget(layout)
-
-    def add_tag(self, btn=None):
-        name = self.tag_input.text.strip()
-        if not name:
+    def __init__(self,**kw):
+        super().__init__(**kw)
+        f=BGWidget()
+        m=BoxLayout(orientation="vertical",spacing=dp(8),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Tags",sz=20,bd=True,col=C["accent"],halign="center",text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.25))
+        m.add_widget(h)
+        bx=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(48))
+        self.inp=MI(hint="New tag name...")
+        bx.add_widget(self.inp)
+        ab=MB("Add",bg=C["accent"],size_hint_x=0.25,height=dp(48))
+        ab.bind(on_release=self._add)
+        bx.add_widget(ab)
+        m.add_widget(bx)
+        sv=ScrollView();self.gl=GridLayout(cols=2,spacing=dp(8),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        sv.add_widget(self.gl);m.add_widget(sv)
+        f.add_widget(m);self.add_widget(f)
+    def _add(self,*a):
+        n=self.inp.text.strip()
+        if not n:return
+        conn=db.get_conn();c=conn.cursor()
+        try:c.execute("INSERT INTO tags (name) VALUES(?)",(n,));conn.commit()
+        except sqlite3.IntegrityError:pass
+        conn.close();self.inp.text="";self._ld()
+    def _ld(self):
+        self.gl.clear_widgets()
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT t.*,(SELECT COUNT(*) FROM task_tags WHERE tag_id=t.id)+(SELECT COUNT(*) FROM book_tags WHERE tag_id=t.id) as cnt FROM tags t ORDER BY cnt DESC")
+        ts=c.fetchall();conn.close()
+        if not ts:
+            self.gl.add_widget(ML("No tags",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(60)))
             return
-        conn = db.get_conn()
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO tags (name) VALUES (?)", (name,))
-            conn.commit()
-            App.get_running_app().show_popup("成功", f"标签 '{name}' 已添加")
-        except sqlite3.IntegrityError:
-            App.get_running_app().show_popup("提示", "该标签已存在")
-        conn.close()
-        self.tag_input.text = ""
-        self.load_tags()
-
-    def load_tags(self):
-        self.tag_list.clear_widgets()
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("SELECT t.*, (SELECT COUNT(*) FROM task_tags WHERE tag_id=t.id)+(SELECT COUNT(*) FROM book_tags WHERE tag_id=t.id) as cnt FROM tags t ORDER BY cnt DESC")
-        tags = c.fetchall()
-        conn.close()
-
-        if not tags:
-            self.tag_list.add_widget(Label(text="暂无标签", color=get_color_from_hex(THEME["text_secondary"]),
-                                           font_size=15, size_hint_y=None, height=60))
-            return
-
-        for t in tags:
-            card = BoxLayout(orientation="vertical", size_hint_y=None, height=70, padding=[8,5], spacing=3)
-            with card.canvas.before:
-                Color(*get_color_from_hex(THEME["surface"]))
-                RoundedRectangle(pos=card.pos, size=card.size, radius=[8])
-            name = t['name']
-            if len(name) > 8:
-                name = name[:8] + ".."
-            card.add_widget(Label(text=f"#{name}", font_size=16, color=get_color_from_hex(THEME["accent"]),
-                                   halign="center", size_hint_y=0.5))
-            card.add_widget(Label(text=f"使用 {t['cnt']} 次", font_size=12,
-                                   color=get_color_from_hex(THEME["text_secondary"]), halign="center", size_hint_y=0.3))
-            self.tag_list.add_widget(card)
-
-    def on_enter(self):
-        self.load_tags()
-
+        for t in ts:
+            cd=MC()
+            n=t['name'][:10]+".." if len(t['name'])>10 else t['name']
+            cd.add_widget(ML(f"#{n}",sz=16,bd=True,col=C["accent"],halign="center"))
+            cd.add_widget(ML(f"Used {t['cnt']}x",sz=12,col=C["text_sec"],halign="center"))
+            self.gl.add_widget(cd)
+    def on_enter(self):self._ld()
 
 class GoalScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.build_ui()
-
-    def build_ui(self):
-        self.main_layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with self.main_layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=self.main_layout.pos, size=self.main_layout.size)
-        self.build_content()
-        self.add_widget(self.main_layout)
-
-    def build_content(self):
-        self.main_layout.clear_widgets()
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        back.bind(on_release=lambda x: setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="🎯 学习目标", font_size=22, bold=True, color=get_color_from_hex(THEME["accent"])))
-        add_btn = Button(text="+", font_size=22, background_normal="",
-                          color=get_color_from_hex(THEME["success"]), size_hint_x=0.15)
-        add_btn.bind(on_release=self.show_add_goal)
-        top.add_widget(add_btn)
-        self.main_layout.add_widget(top)
-
-        total_xp = db.get_total_xp()
-        xp_box = BoxLayout(orientation="horizontal", size_hint_y=0.06)
-        xp_box.add_widget(Label(text=f"⭐ {total_xp} XP", font_size=16, color=get_color_from_hex(THEME["accent"])))
-        self.main_layout.add_widget(xp_box)
-
-        conn = db.get_conn()
-        c = conn.cursor()
+    def __init__(self,**kw):
+        super().__init__(**kw)
+        self.f=BGWidget()
+        self._build()
+        self.add_widget(self.f)
+    def _build(self):
+        self.f.clear_widgets()
+        m=BoxLayout(orientation="vertical",spacing=dp(6),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Goals",sz=20,bd=True,col=C["primary"],halign="center",text_size=(None,None)))
+        ab=MB("+",bg=C["success"],fg=C["text"],size_hint_x=0.12,height=dp(36))
+        ab.bind(on_release=self._add_goal)
+        h.add_widget(ab)
+        m.add_widget(h)
+        m.add_widget(ML(f"⭐ {db.get_total_xp()} XP",sz=14,col=C["accent"],halign="center",text_size=(None,None),size_hint_y=None,height=dp(20)))
+        conn=db.get_conn();c=conn.cursor()
         c.execute("SELECT * FROM user_badges ub JOIN badges b ON ub.badge_id=b.id")
-        badges = c.fetchall()
-        conn.close()
-        badge_text = "  ".join([f"{b['icon']} {b['name']}" for b in badges[:5]])
-        if badge_text:
-            self.main_layout.add_widget(Label(text=f"🏅 已获得: {badge_text}", font_size=13,
-                                               color=get_color_from_hex(THEME["text_secondary"]), size_hint_y=0.06))
-
-        self.scroll = ScrollView()
-        self.goal_list = GridLayout(cols=1, spacing=8, size_hint_y=None, padding=[0,5,0,5])
-        self.goal_list.bind(minimum_height=self.goal_list.setter("height"))
-        self.scroll.add_widget(self.goal_list)
-        self.main_layout.add_widget(self.scroll)
-
-        self.load_goals()
-
-    def load_goals(self):
-        self.goal_list.clear_widgets()
-        conn = db.get_conn()
-        c = conn.cursor()
+        bs=c.fetchall();conn.close()
+        if bs:
+            m.add_widget(ML("  ".join([f"{b['name']}" for b in bs[:4]]),sz=12,col=C["text_sec"],halign="center",text_size=(None,None),size_hint_y=None,height=dp(18)))
+        sv=ScrollView();self.gl=GridLayout(cols=1,spacing=dp(8),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        conn=db.get_conn();c=conn.cursor()
         c.execute("SELECT * FROM goals WHERE status='active' ORDER BY created_at DESC")
-        goals = c.fetchall()
-        conn.close()
-
-        if not goals:
-            self.goal_list.add_widget(Label(text="还没有学习目标\n点击右上角 + 添加", color=get_color_from_hex(THEME["text_secondary"]),
-                                             font_size=15, size_hint_y=None, height=80, halign="center"))
-            return
-
-        for g in goals:
-            self.goal_list.add_widget(GoalCard(g))
-
-    def show_add_goal(self, btn=None):
-        content = BoxLayout(orientation="vertical", spacing=12, padding=15)
-        content.add_widget(Label(text="目标名称:", color=get_color_from_hex(THEME["text"]), size_hint_y=0.08, halign="left"))
-        title_input = RoundedInput(hint_text="例如: 每天读30页书", size_hint_y=0.08)
-        content.add_widget(title_input)
-        content.add_widget(Label(text="每日目标数量:", color=get_color_from_hex(THEME["text"]), size_hint_y=0.08, halign="left"))
-        val_input = RoundedInput(text="1", input_filter="int", size_hint_y=0.08)
-        content.add_widget(val_input)
-        content.add_widget(Label(text="单位 (如: 页/次/分钟):", color=get_color_from_hex(THEME["text"]), size_hint_y=0.08, halign="left"))
-        unit_input = RoundedInput(text="次", size_hint_y=0.08)
-        content.add_widget(unit_input)
-
-        popup = Popup(title="添加学习目标", content=content, size_hint=(0.85, 0.55),
-                       background_color=get_color_from_hex(THEME["surface"]),
-                       separator_color=get_color_from_hex(THEME["primary"]),
-                       title_color=get_color_from_hex(THEME["accent"]))
-
-        def save(btn):
-            title = title_input.text.strip()
-            if not title:
-                return
-            try:
-                val = int(val_input.text)
-            except:
-                val = 1
-            unit = unit_input.text.strip() or "次"
-            conn = db.get_conn()
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO goals (title, target_type, target_value, unit, xp_reward)
-                VALUES (?, 'daily', ?, ?, ?)
-            """, (title, val, unit, val * 5))
-            conn.commit()
-            conn.close()
-            popup.dismiss()
-            self.build_content()
-
-        btn_box = BoxLayout(orientation="horizontal", spacing=15, size_hint_y=0.1)
-        save_btn = Button(text="保存", background_normal="", background_color=get_color_from_hex(THEME["success"]),
-                           color=(1,1,1,1))
-        save_btn.bind(on_release=save)
-        btn_box.add_widget(save_btn)
-        cancel_btn = Button(text="取消", background_normal="", background_color=get_color_from_hex(THEME["danger"]),
-                             color=(1,1,1,1))
-        cancel_btn.bind(on_release=popup.dismiss)
-        btn_box.add_widget(cancel_btn)
-        content.add_widget(btn_box)
-        popup.open()
-
-    def on_enter(self):
-        self.build_content()
-
+        gs=c.fetchall();conn.close()
+        if not gs:
+            self.gl.add_widget(ML("No goals yet\nTap + to add one",sz=14,col=C["text_sec"],halign="center",size_hint_y=None,height=dp(80)))
+        else:
+            for g in gs:self.gl.add_widget(GoalCard(g))
+        sv.add_widget(self.gl);m.add_widget(sv)
+        self.f.add_widget(m)
+    def _add_goal(self,*a):
+        l=BoxLayout(orientation="vertical",spacing=dp(12),padding=dp(16))
+        l.add_widget(ML("Goal name:",sz=14,col=C["text"]))
+        ti=MI(hint="e.g. Read 30 pages daily")
+        l.add_widget(ti)
+        l.add_widget(ML("Daily target:",sz=14,col=C["text"]))
+        vi=MI(hint="30")
+        l.add_widget(vi)
+        l.add_widget(ML("Unit (pages/reps/min):",sz=14,col=C["text"]))
+        ui=MI(hint="pages")
+        l.add_widget(ui)
+        p=Popup(title="New Goal",content=l,size_hint=(0.85,0.55),background=C["surface"],
+                separator_color=rgba(C["border"]),title_color=rgba(C["text"]))
+        def sv(*a):
+            t=ti.text.strip()
+            if not t:return
+            try:v=int(vi.text) if vi.text.strip() else 1
+            except:v=1
+            u=ui.text.strip() or "reps"
+            conn=db.get_conn();c=conn.cursor()
+            c.execute("INSERT INTO goals(title,target_type,target_value,unit,xp_reward) VALUES(?,'daily',?,?,?)",(t,v,u,v*5))
+            conn.commit();conn.close();p.dismiss();self._build()
+        bb=BoxLayout(spacing=dp(12),size_hint_y=None,height=dp(44))
+        svb=MB("Save",bg=C["success"],fg=C["text"])
+        svb.bind(on_release=sv)
+        bb.add_widget(svb)
+        cvb=MB("Cancel",bg=C["danger"],fg=C["text"])
+        cvb.bind(on_release=p.dismiss)
+        bb.add_widget(cvb)
+        l.add_widget(bb);p.open()
+    def on_enter(self):self._build()
 
 class GoalCard(BoxLayout):
-    def __init__(self, goal, **kwargs):
-        super().__init__(**kwargs)
-        self.goal_id = goal['id']
-        self.target = goal['target_value']
-        self.unit = goal['unit']
-        self.xp_reward = goal['xp_reward']
-        self.orientation = "vertical"
-        self.size_hint_y = None
-        self.height = 90
-        self.padding = [12, 8]
-        self.spacing = 4
-
-        with self.canvas.before:
-            Color(*get_color_from_hex(THEME["surface"]))
-            RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
-
-        title_lbl = Label(text=goal['title'], font_size=16, color=get_color_from_hex(THEME["accent"]),
-                           halign="left", size_hint_y=0.35)
-        title_lbl.bind(size=title_lbl.setter("text_size"))
-        self.add_widget(title_lbl)
-
-        progress_layout = BoxLayout(orientation="horizontal", size_hint_y=0.4, spacing=10)
-
-        current = goal['current_value']
-        pct = min(current / self.target, 1.0) if self.target > 0 else 0
-
-        pb = ProgressBar(max=1, value=pct, size_hint_x=0.6)
-        pb.color = get_color_from_hex(THEME["success"])
-        progress_layout.add_widget(pb)
-
-        self.prog_label = Label(text=f"{current}/{self.target} {self.unit}", font_size=13,
-                                 color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        progress_layout.add_widget(self.prog_label)
-
-        add_prog_btn = Button(text="+1", font_size=14, size_hint_x=0.15, background_normal="",
-                               background_color=get_color_from_hex(THEME["primary"]), color=(1,1,1,1))
-        add_prog_btn.bind(on_release=self.add_progress)
-        progress_layout.add_widget(add_prog_btn)
-
-        self.add_widget(progress_layout)
-
-    def add_progress(self, btn):
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("SELECT * FROM goals WHERE id=?", (self.goal_id,))
-        goal = c.fetchone()
-        new_val = goal['current_value'] + 1
-        c.execute("UPDATE goals SET current_value=? WHERE id=?", (new_val, self.goal_id))
-        db.add_xp("goal", self.goal_id, self.xp_reward)
-
-        if new_val >= self.target:
-            c.execute("UPDATE goals SET current_value=0, status='active' WHERE id=?", (self.goal_id,))
-            App.get_running_app().show_popup("🎉 目标达成！", f"完成了 '{goal['title']}'!\n获得 {self.xp_reward} XP！")
-        conn.commit()
+    def __init__(self,g,**kw):
+        super().__init__(**kw)
+        self.gid=g['id'];self.tg=g['target_value'];self.un=g['unit'];self.xp=g['xp_reward']
+        self.orientation="vertical";self.padding=dp(16);self.spacing=dp(4)
+        self.size_hint_y=None;self.height=dp(110)
+        self.bind(pos=self._draw,size=self._draw)
+        self.add_widget(ML(g['title'],sz=16,bd=True,col=C["primary"]))
+        cur=g['current_value'];pct=min(cur/self.tg,1) if self.tg>0 else 0
+        pb=BoxLayout(spacing=dp(10),size_hint_y=None,height=dp(24))
+        pgb=ProgressBar(max=1,value=pct,size_hint_x=0.5,height=dp(24))
+        pb.add_widget(pgb)
+        pb.add_widget(ML(f"{cur}/{self.tg} {self.un}",sz=13,col=C["text"],size_hint_x=0.2))
+        apb=MB("+1",bg=C["primary"],fg=C["text"],size_hint_x=0.12,height=dp(24))
+        apb.bind(on_release=self._inc)
+        pb.add_widget(apb)
+        self.add_widget(pb)
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT COUNT(*) FROM goal_log WHERE goal_id=? AND date=date('now','localtime')",(self.gid,))
+        today_done=c.fetchone()[0]
+        c.execute("SELECT DISTINCT date FROM goal_log WHERE goal_id=? ORDER BY date DESC",(self.gid,))
+        dates=[r['date'] for r in c.fetchall()]
         conn.close()
-
-        App.get_running_app().root.get_screen("goals").build_content()
-
+        streak=0
+        d=datetime.now().date()
+        for i,ds in enumerate(dates):
+            dd=datetime.strptime(ds,"%Y-%m-%d").date()
+            if i==0:
+                if dd!=d and dd!=(d-timedelta(1)):break
+            if (d-timedelta(i)).isoformat()==ds:streak+=1
+            else:break
+        status="✅ Checked in" if today_done>0 else "⬜ Not checked in"
+        self.add_widget(ML(f"{status} | {streak} day streak",sz=12,col=C["text_sec"]))
+    def _draw(self,*a):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(*rgba(C["shadow"],0.5))
+            Rectangle(pos=(self.x+dp(2),self.y-dp(2)),size=self.size)
+            Color(*rgba(C["card"]))
+            Rectangle(pos=self.pos,size=self.size)
+            Color(*rgba(C["border"]))
+            Rectangle(pos=self.pos,size=(self.width,dp(BW)))
+            Rectangle(pos=self.pos,size=(dp(BW),self.height))
+            Rectangle(pos=(self.x,self.y+self.height-dp(BW)),size=(self.width,dp(BW)))
+            Rectangle(pos=(self.x+self.width-dp(BW),self.y),size=(dp(BW),self.height))
+    def _inc(self,*a):
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT * FROM goals WHERE id=?",(self.gid,))
+        g=c.fetchone();nv=g['current_value']+1
+        c.execute("UPDATE goals SET current_value=? WHERE id=?",(nv,self.gid))
+        db.add_xp("goal",self.gid,self.xp)
+        today=datetime.now().date().isoformat()
+        c.execute("INSERT OR IGNORE INTO goal_log(goal_id,date) VALUES(?,?)",(self.gid,today))
+        if nv>=self.tg:
+            c.execute("UPDATE goals SET current_value=0 WHERE id=?",(self.gid,))
+        conn.commit();conn.close()
+        App.get_running_app().root.get_screen("goals")._build()
 
 class StatsScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self,**kw):
+        super().__init__(**kw)
         self.build_ui()
-
     def build_ui(self):
-        layout = BoxLayout(orientation="vertical", spacing=10, padding=15)
-        with layout.canvas.before:
-            Color(*get_color_from_hex(THEME["bg"]))
-            Rectangle(pos=layout.pos, size=layout.size)
-
-        top = BoxLayout(orientation="horizontal", size_hint_y=0.08)
-        back = Button(text="← 返回", font_size=16, background_normal="",
-                       color=get_color_from_hex(THEME["text"]), size_hint_x=0.25)
-        back.bind(on_release=lambda x: setattr(self.manager, "current", "main"))
-        top.add_widget(back)
-        top.add_widget(Label(text="📊 统计与成就", font_size=20, bold=True, color=get_color_from_hex(THEME["accent"])))
-        top.add_widget(Label(size_hint_x=0.25))
-        layout.add_widget(top)
-
-        self.scroll = ScrollView()
-        self.content = GridLayout(cols=1, spacing=10, size_hint_y=None, padding=[0,5,0,5])
-        self.content.bind(minimum_height=self.content.setter("height"))
-        self.scroll.add_widget(self.content)
-        layout.add_widget(self.scroll)
-        self.add_widget(layout)
-
+        f=BGWidget()
+        m=BoxLayout(orientation="vertical",spacing=dp(8),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","main"))
+        h.add_widget(bb)
+        h.add_widget(ML("Achievements",sz=20,bd=True,col="#79C0FF",halign="center",text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.25))
+        m.add_widget(h)
+        sv=ScrollView();self.gl=GridLayout(cols=1,spacing=dp(8),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        sv.add_widget(self.gl);m.add_widget(sv)
+        f.add_widget(m);self.add_widget(f)
     def on_enter(self):
-        self.refresh()
-
-    def refresh(self):
-        self.content.clear_widgets()
-        conn = db.get_conn()
-        c = conn.cursor()
-
-        total_xp = db.get_total_xp()
-
-        c.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE completed=1")
-        pomo_count = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM tasks WHERE status='done'")
-        task_done = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM tasks")
-        task_total = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM books")
-        book_count = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM goals WHERE status='active'")
-        goal_count = c.fetchone()[0]
-
+        self.gl.clear_widgets()
+        conn=db.get_conn();c=conn.cursor()
+        tx=db.get_total_xp()
+        c.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE completed=1");pc=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM tasks WHERE status='done'");td=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM tasks");tt=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM books");bc=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM goals WHERE status='active'");gc=c.fetchone()[0]
         conn.close()
+        cd=MC()
+        cd.add_widget(ML("Stats Overview",sz=18,bd=True,col=C["text"]))
+        for lbl,val in [("Total XP",f"{tx} XP"),("Pomodoros",f"{pc}"),("Tasks Done",f"{td}/{tt}"),("Books",f"{bc}"),("Active Goals",f"{gc}")]:
+            r=BoxLayout(spacing=dp(8),size_hint_y=None,height=dp(28))
+            r.add_widget(ML(lbl,sz=14,col=C["text_sec"]))
+            r.add_widget(ML(val,sz=14,bd=True,col=C["text"],halign="right"))
+            cd.add_widget(r)
+        self.gl.add_widget(cd)
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT b.*,ub.unlocked_at FROM user_badges ub JOIN badges b ON ub.badge_id=b.id ORDER BY ub.unlocked_at DESC")
+        bs=c.fetchall();conn.close()
+        bd=MC()
+        bd.add_widget(ML("Earned Badges",sz=18,bd=True,col=C["text"]))
+        if bs:
+            for b in bs:
+                bd.add_widget(ML(f"{b['name']} - {b['description']}",sz=13,col=C["text"]))
+        else:bd.add_widget(ML("No badges yet. Keep going!",sz=13,col=C["text_sec"]))
+        self.gl.add_widget(bd)
+        cb=MB("View All Badges",bg=C["primary"])
+        cb.bind(on_release=lambda x:setattr(self.manager,"current","achieve"))
+        self.gl.add_widget(cb)
 
-        stats = [
-            ("⭐ 总经验值", f"{total_xp} XP"),
-            ("🍅 完成番茄钟", f"{pomo_count} 个"),
-            ("✅ 完成任务", f"{task_done}/{task_total}"),
-            ("📚 电子书数量", f"{book_count} 本"),
-            ("🎯 活跃目标", f"{goal_count} 个"),
-        ]
-
-        info_card = BoxLayout(orientation="vertical", size_hint_y=None, padding=[15,10], spacing=8)
-        with info_card.canvas.before:
-            Color(*get_color_from_hex(THEME["surface"]))
-            RoundedRectangle(pos=info_card.pos, size=info_card.size, radius=[10])
-        info_card.bind(minimum_height=info_card.setter("height"))
-        info_card.add_widget(Label(text="📈 学习统计", font_size=18, bold=True, color=get_color_from_hex(THEME["accent"]),
-                                    size_hint_y=None, height=30))
-        for label, val in stats:
-            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=30)
-            row.add_widget(Label(text=label, font_size=14, color=get_color_from_hex(THEME["text"]), halign="left"))
-            row.add_widget(Label(text=val, font_size=14, color=get_color_from_hex(THEME["primary"]), halign="right"))
-            info_card.add_widget(row)
-        self.content.add_widget(info_card)
-
-        conn = db.get_conn()
-        c = conn.cursor()
-        c.execute("""
-            SELECT b.*, ub.unlocked_at FROM user_badges ub
-            JOIN badges b ON ub.badge_id=b.id
-            ORDER BY ub.unlocked_at DESC
-        """)
-        badges = c.fetchall()
+class AchieveScreen(Screen):
+    def __init__(self,**kw):
+        super().__init__(**kw)
+        f=BGWidget()
+        m=BoxLayout(orientation="vertical",spacing=dp(8),padding=[dp(16),dp(30),dp(16),dp(16)])
+        h=BoxLayout(size_hint_y=None,height=dp(40))
+        bb=MB("Back",bg=C["card"],size_hint_x=0.25)
+        bb.bind(on_release=lambda x:setattr(self.manager,"current","stats"))
+        h.add_widget(bb)
+        h.add_widget(ML("All Badges",sz=20,bd=True,col=C["gold"],halign="center",text_size=(None,None)))
+        h.add_widget(Label(size_hint_x=0.25))
+        m.add_widget(h)
+        self.sv=ScrollView();self.gl=GridLayout(cols=2,spacing=dp(8),size_hint_y=None,padding=[0,dp(4),0,dp(4)])
+        self.gl.bind(minimum_height=self.gl.setter("height"))
+        self.sv.add_widget(self.gl);m.add_widget(self.sv)
+        f.add_widget(m);self.add_widget(f)
+    def on_enter(self):
+        self.gl.clear_widgets()
+        conn=db.get_conn();c=conn.cursor()
+        c.execute("SELECT * FROM badges ORDER BY id")
+        all_badges=c.fetchall()
+        total_xp=db.get_total_xp()
+        c.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE completed=1");pc=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM tasks WHERE status='done'");td=c.fetchone()[0]
+        c.execute("SELECT badge_id FROM user_badges")
+        owned={r['badge_id'] for r in c.fetchall()}
         conn.close()
+        for b in all_badges:
+            unlocked=b['id'] in owned
+            cd=MC()
+            cd.size_hint_y=None;cd.height=dp(100)
+            cd.add_widget(ML(b['name'],sz=14,bd=True,col=C["gold"] if unlocked else C["text_muted"],halign="center"))
+            cd.add_widget(ML(b['description'],sz=11,col=C["text_sec"] if unlocked else C["text_muted"],halign="center"))
+            if not unlocked:
+                ct=b['condition_type'];cv=b['condition_value']
+                if ct=='xp':prog=f"{total_xp}/{cv}"
+                elif ct=='pomodoro_count':prog=f"{pc}/{cv}"
+                elif ct=='task_done':prog=f"{td}/{cv}"
+                else:prog="?"
+                cd.add_widget(ML(prog,sz=12,col=C["text_muted"],halign="center"))
+            cd.bind(on_touch_down=lambda inst,touch,b=b,unlocked=unlocked:self._show_detail(inst,touch,b,unlocked))
+            self.gl.add_widget(cd)
+    def _show_detail(self,inst,touch,b,unlocked):
+        if inst.collide_point(*touch.pos):
+            msg=f"{b['name']}\n\n{b['description']}"
+            if unlocked:msg+="\n\n✅ Unlocked"
+            else:
+                ct=b['condition_type'];cv=b['condition_value']
+                h=""
+                if ct=='xp':h=f"Earn {cv} XP"
+                elif ct=='pomodoro_count':h=f"Complete {cv} Pomodoros"
+                elif ct=='task_done':h=f"Complete {cv} tasks"
+                elif ct=='streak':h=f"Study {cv} days in a row"
+                msg+=f"\n\n🔒 Locked\nCondition: {h}"
+            App.get_running_app().popup(b['name'],msg)
 
-        badge_card = BoxLayout(orientation="vertical", size_hint_y=None, padding=[15,10], spacing=6)
-        with badge_card.canvas.before:
-            Color(*get_color_from_hex(THEME["surface"]))
-            RoundedRectangle(pos=badge_card.pos, size=badge_card.size, radius=[10])
-        badge_card.bind(minimum_height=badge_card.setter("height"))
-        badge_card.add_widget(Label(text="🏅 已获得成就", font_size=18, bold=True,
-                                     color=get_color_from_hex(THEME["accent"]), size_hint_y=None, height=30))
-
-        if badges:
-            for b in badges:
-                lbl = Label(text=f"{b['icon']}  {b['name']}  -  {b['description']}", font_size=14,
-                             color=get_color_from_hex(THEME["text"]), size_hint_y=None, height=25, halign="left")
-                badge_card.add_widget(lbl)
-        else:
-            badge_card.add_widget(Label(text="还没有获得成就哦，继续加油！", font_size=14,
-                                         color=get_color_from_hex(THEME["text_secondary"]), size_hint_y=None, height=25))
-        self.content.add_widget(badge_card)
-
-
-if __name__ == "__main__":
-    try:
-        import sqlite3 as sqlite3
-    except:
-        pass
-    StudyApp().run()
+if __name__=="__main__":
+    StudyMate().run()

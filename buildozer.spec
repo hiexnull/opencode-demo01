@@ -14,14 +14,13 @@ presplash.color = #1A1A2E
 icon = icon.png
 android.gradle_dependencies = 'com.google.android.gms:play-services-base:18.2.0'
 android.enable_services = 
-android.api = 33
+android.api = 34
 android.minapi = 21
-android.sdk = 33
-android.ndk = 25.2.9519653
+android.ndk = 28c
 android.gradle_source_task = 
-android.arch = armeabi-v7a,arm64-v8a
+android.archs = arm64-v8a
 android.accept_sdk_license = True
-android.compile_sdk = 33
+android.compile_sdk = 34
 android.manifest_intent_filters =
 
 [buildozer]

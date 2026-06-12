@@ -71,7 +71,7 @@ def init_db():
             target_type TEXT DEFAULT 'daily',
             target_value INTEGER DEFAULT 1,
             current_value INTEGER DEFAULT 0,
-            unit TEXT DEFAULT '次',
+            unit TEXT DEFAULT 'reps',
             xp_reward INTEGER DEFAULT 10,
             created_at TEXT DEFAULT (datetime('now','localtime')),
             deadline TEXT,
@@ -106,24 +106,38 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS book_content (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+            content TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS goal_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            value INTEGER DEFAULT 1,
+            UNIQUE(goal_id, date)
+        );
     """)
     conn.commit()
 
     c.execute("SELECT COUNT(*) FROM badges")
     if c.fetchone()[0] == 0:
         default_badges = [
-            ('初次专注', '完成第一个番茄钟', 'alarm', 'pomodoro_count', 1),
-            ('专注新手', '完成10个番茄钟', 'alarm', 'pomodoro_count', 10),
-            ('专注达人', '完成50个番茄钟', 'alarm', 'pomodoro_count', 50),
-            ('专注大师', '完成100个番茄钟', 'alarm', 'pomodoro_count', 100),
-            ('任务起步', '完成第一个任务', 'checkbox', 'task_done', 1),
-            ('行动派', '完成50个任务', 'checkbox', 'task_done', 50),
-            ('学习之星', '连续学习7天', 'calendar', 'streak', 7),
-            ('坚持不懈', '连续学习30天', 'calendar', 'streak', 30),
-            ('初级学者', '获得100经验值', 'star', 'xp', 100),
-            ('中级学者', '获得500经验值', 'star', 'xp', 500),
-            ('高级学者', '获得2000经验值', 'star', 'xp', 2000),
-            ('学霸', '获得10000经验值', 'star', 'xp', 10000),
+            ('First Focus', 'Complete your first Pomodoro', 'alarm', 'pomodoro_count', 1),
+            ('Focus Novice', 'Complete 10 Pomodoros', 'alarm', 'pomodoro_count', 10),
+            ('Focus Pro', 'Complete 50 Pomodoros', 'alarm', 'pomodoro_count', 50),
+            ('Focus Master', 'Complete 100 Pomodoros', 'alarm', 'pomodoro_count', 100),
+            ('First Task', 'Complete your first task', 'checkbox', 'task_done', 1),
+            ('Go-Getter', 'Complete 50 tasks', 'checkbox', 'task_done', 50),
+            ('Study Star', 'Study 7 days in a row', 'calendar', 'streak', 7),
+            ('Persistent', 'Study 30 days in a row', 'calendar', 'streak', 30),
+            ('Junior Scholar', 'Earn 100 XP', 'star', 'xp', 100),
+            ('Intermediate Scholar', 'Earn 500 XP', 'star', 'xp', 500),
+            ('Senior Scholar', 'Earn 2000 XP', 'star', 'xp', 2000),
+            ('Genius', 'Earn 10000 XP', 'star', 'xp', 10000),
         ]
         c.executemany(
             "INSERT INTO badges (name, description, icon, condition_type, condition_value) VALUES (?,?,?,?,?)",
